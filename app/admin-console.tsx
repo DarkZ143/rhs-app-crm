@@ -12,6 +12,7 @@ type NotificationTarget = "all" | "user" | "users" | "active_plan" | "no_active_
 type NotificationTiming = "now" | "scheduled";
 type DialogState =
   | { kind: "credit"; client: Row; wallet: Wallet }
+  | { kind: "newClient" }
   | { kind: "partner" }
   | { kind: "manualOrder" }
   | { kind: "orderStatus"; order: Row }
@@ -463,6 +464,9 @@ export default function AdminConsole() {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "The action failed.");
+      const createdClientId = action === "createClient" && payload.data && typeof payload.data === "object"
+        ? String((payload.data as Record<string, unknown>).uid || "")
+        : "";
       if (action === "addCredits" && payload.data && typeof payload.data === "object") {
         const result = payload.data as Record<string, unknown>;
         const wallet = String(result.walletType || "") as Wallet;
@@ -475,6 +479,10 @@ export default function AdminConsole() {
       }
       setDialog(null); setNotice(successMessage);
       await loadData(true);
+      if (createdClientId) {
+        setSearch("");
+        setSelectedClientId(createdClientId);
+      }
       if (confirmedCredit) {
         const { userId, walletKey, balance } = confirmedCredit;
         setData((current) => ({
@@ -601,13 +609,13 @@ export default function AdminConsole() {
       <Metric icon="◷" label="Ledger entries" value={coins(data.ledger.length)} tone="orange" />
     </div>
     <div className="client-id-lookup"><div><strong>Open a client by ID</strong><small>Paste the exact Firebase client ID to manage their account.</small></div><form onSubmit={openClientById}><label className="sr-only" htmlFor="client-id-lookup">Client ID</label><input id="client-id-lookup" value={clientIdLookup} onChange={(event) => setClientIdLookup(event.target.value)} placeholder="Enter client ID" autoComplete="off" /><button className="button button-primary button-small" type="submit" disabled={!clientIdLookup.trim()}>Open client</button></form></div>
-    <Panel title="Registered clients" subtitle={`${filteredClients.length} live profiles`}>
+    <Panel title="Registered clients" subtitle={`${filteredClients.length} live profiles`} action={canManageLogins ? <button className="button button-primary" disabled={busy} onClick={() => setDialog({ kind: "newClient" })}>＋ Add client</button> : undefined}>
       <div className="table-wrap"><table><thead><tr><th>Client</th><th>Contact</th><th>Total RHS Credit</th>{walletOptions.map((wallet) => <th key={wallet.id}>{wallet.shortLabel} RHS Credit</th>)}<th>Orders</th><th>Family requests</th><th>Joined</th><th /></tr></thead><tbody>
         {filteredClients.map((client) => {
           const clientOrders = ordersForClient(client, data.orders);
           const total = walletOptions.reduce((sum, wallet) => sum + number(client, wallet.key), 0);
           return <tr key={client.id} className="clickable-row" onClick={() => setSelectedClientId(client.id)}>
-            <td><div className="person-cell"><span className="avatar small-avatar">{initials(text(client, "name", "displayName", "email"))}</span><span><strong>{text(client, "name", "displayName") || "RHS member"}</strong><small>{client.id}</small></span></div></td>
+            <td><div className="person-cell"><span className="avatar small-avatar">{initials(text(client, "name", "displayName", "email"))}</span><span><strong>{text(client, "name", "displayName") || "RHS member"}</strong><small>{client.id}</small><small className="cell-sub">{[text(client, "dateOfBirth"), text(client, "gender")].filter(Boolean).join(" · ")}</small></span></div></td>
             <td>{text(client, "email") || "—"}<small className="cell-sub">{text(client, "phone", "phoneNumber") || "No phone"}</small></td>
             <td><strong className="total-coins">{inr(total)}</strong></td>
             {walletOptions.map((wallet) => <td key={wallet.id}>{inr(number(client, wallet.key))}</td>)}
@@ -1345,6 +1353,23 @@ function Modal({ title, subtitle, onClose, children, busy }: { title: string; su
 
 function ActionDialog({ dialog, companies, canMutate, busy, onClose, onSubmit }: { dialog: Exclude<DialogState, null>; companies: Row[]; canMutate: boolean; busy: boolean; onClose: () => void; onSubmit: (action: string, values: Record<string, unknown>, message: string) => void }) {
   const handle = (action: string, message: string, fixed: Record<string, unknown> = {}) => (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); onSubmit(action, { ...formObject(event.currentTarget), ...fixed }, message); };
+  if (dialog.kind === "newClient") return <Modal title="Add client" subtitle="Create the client ID after assigning their policy. Email/password and phone OTP sign-in will use this same account." onClose={onClose} busy={busy}>
+    <form className="stack-form modal-form" onSubmit={handle("createClient", "Client account created. Email/password and phone OTP login are ready.")}>
+      <label>Client name<input name="name" autoComplete="name" minLength={2} maxLength={80} required /></label>
+      <div className="form-grid">
+        <label>Date of birth<input name="dateOfBirth" type="date" max={localDateInput(new Date())} required /></label>
+        <label>Gender<select name="gender" defaultValue="" required><option value="" disabled>Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select></label>
+      </div>
+      <label>Email<input name="email" type="email" autoComplete="email" maxLength={120} required /></label>
+      <div className="form-grid">
+        <label>Phone number<input name="phoneNumber" type="tel" inputMode="tel" autoComplete="tel" maxLength={20} placeholder="+91 98765 43210" required /></label>
+        <label>Password<input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label>
+      </div>
+      <div className="data-warning">The client can sign in with this email and password or request an OTP on this phone number.</div>
+      <label className="confirmation-row"><input type="checkbox" name="confirmedPhoneOwnership" value="true" required /><span>I confirmed that the client controls this phone number and wants to use it for OTP sign-in.</span></label>
+      <div className="modal-actions"><button className="button button-soft" type="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button button-primary" type="submit" disabled={!canMutate || busy}>{busy ? "Creating account…" : "Create client ID"}</button></div>
+    </form>
+  </Modal>;
   if (dialog.kind === "phoneLogin") {
     const login = phoneLoginRecord(dialog.client);
     const phoneNumber = String(login.phoneNumber ?? text(dialog.client, "phone", "phoneNumber"));

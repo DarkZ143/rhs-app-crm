@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { callAdminApi, createDocument, getAdminSession, patchDocument } from "@/lib/firebase-rest-server";
+import { AdminApiError, callAdminApi, createDocument, getAdminSession, patchDocument } from "@/lib/firebase-rest-server";
 
 type Body = Record<string, unknown>;
 const text = (body: Body, key: string) => String(body[key] ?? "").trim();
@@ -90,6 +90,20 @@ export async function POST(request: Request) {
         }
         result = await callAdminApi(`/admin/users/${encodeURIComponent(userId)}/phone-login`, session.idToken, {
           ...(phoneNumber ? { phoneNumber } : {}), status,
+        }, "POST");
+        break;
+      }
+      case "createClient": {
+        requireMutable();
+        if (!canManageLogins) throw new Error("Your admin role cannot manage client accounts.");
+        result = await callAdminApi("/admin/clients", session.idToken, {
+          name: text(body, "name"),
+          dateOfBirth: text(body, "dateOfBirth"),
+          gender: text(body, "gender"),
+          email: text(body, "email").toLowerCase(),
+          phoneNumber: text(body, "phoneNumber"),
+          password: String(body.password ?? ""),
+          confirmedPhoneOwnership: text(body, "confirmedPhoneOwnership") === "true",
         }, "POST");
         break;
       }
@@ -417,6 +431,9 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ data: result, ok: true }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Admin action failed." }, { status: 400 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Admin action failed." },
+      { status: error instanceof AdminApiError ? error.status : 400 },
+    );
   }
 }
